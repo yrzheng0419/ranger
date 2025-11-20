@@ -2135,3 +2135,405 @@ class paste_ext(Command):
 
     def execute(self):
         return self.fm.paste(make_safe_path=paste_ext.make_safe_path)
+
+# ===================================================================
+# AI Research Student Custom Commands
+# ===================================================================
+
+class dataset_number(Command):
+    """:dataset_number [directory]
+    
+    Rename all files in the specified directory with sequential numbers.
+    Format: 00000001.ext, 00000002.ext, etc.
+    Returns error if directory contains subdirectories.
+    """
+    
+    def execute(self):
+        import os
+        from datetime import datetime
+        
+        # Get target directory
+        if self.arg(1):
+            target_dir = os.path.expanduser(self.arg(1))
+        else:
+            # Use current selected directory
+            if self.fm.thisfile.is_directory:
+                target_dir = self.fm.thisfile.path
+            else:
+                self.fm.notify("Please specify a directory or select one", bad=True)
+                return
+        
+        if not os.path.isdir(target_dir):
+            self.fm.notify("Not a valid directory", bad=True)
+            return
+        
+        # Check for subdirectories
+        items = os.listdir(target_dir)
+        for item in items:
+            item_path = os.path.join(target_dir, item)
+            if os.path.isdir(item_path):
+                self.fm.notify("Error: Directory contains subdirectories", bad=True)
+                return
+        
+        # Get all files and sort them
+        files = [f for f in items if os.path.isfile(os.path.join(target_dir, f))]
+        files.sort()
+        
+        if not files:
+            self.fm.notify("No files found in directory", bad=True)
+            return
+        
+        # Rename files
+        temp_names = []
+        for idx, filename in enumerate(files, start=1):
+            old_path = os.path.join(target_dir, filename)
+            ext = os.path.splitext(filename)[1]
+            new_name = "{:08d}{}".format(idx, ext)
+            temp_name = "temp_{}".format(new_name)
+            temp_path = os.path.join(target_dir, temp_name)
+            
+            os.rename(old_path, temp_path)
+            temp_names.append((temp_path, os.path.join(target_dir, new_name)))
+        
+        # Final rename
+        for temp_path, final_path in temp_names:
+            os.rename(temp_path, final_path)
+        
+        self.fm.notify("Successfully numbered {} files".format(len(files)))
+        self.fm.reload_cwd()
+    
+    def tab(self, tabnum):
+        return self._tab_directory_content()
+
+
+class dataset_split(Command):
+    """:dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false]
+    
+    Split dataset into train/val/test sets according to YOLO format.
+    
+    Arguments:
+    - directory: path to original dataset
+    - x:y:z: ratio for train:val:test (e.g., 7:2:1)
+    - -c: classification task
+    - -o: object detection task
+    - -s: instance segmentation task
+    - -d: add date prefix (default: true)
+    
+    Examples:
+    :dataset_split ~/dataset 7:2:1 -c
+    :dataset_split ~/dataset 8:1:1 -o -d false
+    """
+    
+    def execute(self):
+        import os
+        import shutil
+        import random
+        from datetime import datetime
+        
+        # Parse arguments
+        if len(self.args) < 3:
+            self.fm.notify("Usage: dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false]", bad=True)
+            return
+        
+        src_dir = os.path.expanduser(self.arg(1))
+        ratio_str = self.arg(2)
+        
+        # Parse ratio
+        try:
+            ratios = [int(x) for x in ratio_str.split(':')]
+            if len(ratios) != 3 or any(r < 0 for r in ratios):
+                raise ValueError
+            train_ratio, val_ratio, test_ratio = ratios
+            total = sum(ratios)
+        except:
+            self.fm.notify("Invalid ratio format. Use x:y:z (e.g., 7:2:1)", bad=True)
+            return
+        
+        # Parse task type
+        task_type = None
+        add_date = True
+        
+        for arg in self.args[3:]:
+            if arg in ['-c', '-o', '-s']:
+                task_type = arg[1:]  # 'c', 'o', or 's'
+            elif arg == '-d':
+                # Check next argument
+                idx = self.args.index(arg)
+                if idx + 1 < len(self.args):
+                    add_date = self.args[idx + 1].lower() != 'false'
+        
+        if not task_type:
+            self.fm.notify("Please specify task type: -c, -o, or -s", bad=True)
+            return
+        
+        if not os.path.isdir(src_dir):
+            self.fm.notify("Source directory does not exist", bad=True)
+            return
+        
+        # Create new dataset name
+        date_prefix = datetime.now().strftime("%Y%m%d") + "_" if add_date else ""
+        dataset_name = os.path.basename(src_dir.rstrip('/'))
+        new_dataset_name = date_prefix + dataset_name
+        parent_dir = os.path.dirname(src_dir.rstrip('/'))
+        dst_dir = os.path.join(parent_dir, new_dataset_name)
+        
+        if os.path.exists(dst_dir):
+            self.fm.notify("Destination directory already exists", bad=True)
+            return
+        
+        try:
+            if task_type == 'c':
+                self._split_classification(src_dir, dst_dir, train_ratio, val_ratio, test_ratio, total)
+            elif task_type in ['o', 's']:
+                self._split_detection_segmentation(src_dir, dst_dir, train_ratio, val_ratio, test_ratio, total)
+            
+            self.fm.notify("Dataset split successfully: {}".format(new_dataset_name))
+            self.fm.reload_cwd()
+        except Exception as e:
+            self.fm.notify("Error: {}".format(str(e)), bad=True)
+    
+    def _split_classification(self, src_dir, dst_dir, train_r, val_r, test_r, total):
+        import os
+        import shutil
+        import random
+        
+        # Get all class directories
+        classes = [d for d in os.listdir(src_dir) if os.path.isdir(os.path.join(src_dir, d))]
+        
+        if not classes:
+            raise ValueError("No class directories found")
+        
+        # Create destination structure
+        for split in ['train', 'val', 'test']:
+            for class_name in classes:
+                os.makedirs(os.path.join(dst_dir, split, class_name), exist_ok=True)
+        
+        # Split each class
+        for class_name in classes:
+            class_path = os.path.join(src_dir, class_name)
+            files = [f for f in os.listdir(class_path) if os.path.isfile(os.path.join(class_path, f))]
+            
+            random.shuffle(files)
+            
+            n_train = int(len(files) * train_r / total)
+            n_val = int(len(files) * val_r / total)
+            
+            train_files = files[:n_train]
+            val_files = files[n_train:n_train + n_val]
+            test_files = files[n_train + n_val:]
+            
+            # Copy files
+            for f in train_files:
+                shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'train', class_name, f))
+            for f in val_files:
+                shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'val', class_name, f))
+            for f in test_files:
+                shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'test', class_name, f))
+    
+    def _split_detection_segmentation(self, src_dir, dst_dir, train_r, val_r, test_r, total):
+        import os
+        import shutil
+        import random
+        
+        # Check for image and label directories
+        image_dir = os.path.join(src_dir, 'image')
+        label_dir = os.path.join(src_dir, 'label')
+        
+        if not os.path.isdir(image_dir) or not os.path.isdir(label_dir):
+            raise ValueError("Dataset must contain 'image' and 'label' directories")
+        
+        # Get all image files
+        image_files = [f for f in os.listdir(image_dir) if os.path.isfile(os.path.join(image_dir, f))]
+        
+        # Match images with labels (by base name)
+        matched_pairs = []
+        for img_file in image_files:
+            base_name = os.path.splitext(img_file)[0]
+            # Find corresponding label file
+            label_files = [f for f in os.listdir(label_dir) if os.path.splitext(f)[0] == base_name]
+            if label_files:
+                matched_pairs.append((img_file, label_files[0]))
+        
+        if not matched_pairs:
+            raise ValueError("No matching image-label pairs found")
+        
+        random.shuffle(matched_pairs)
+        
+        n_train = int(len(matched_pairs) * train_r / total)
+        n_val = int(len(matched_pairs) * val_r / total)
+        
+        train_pairs = matched_pairs[:n_train]
+        val_pairs = matched_pairs[n_train:n_train + n_val]
+        test_pairs = matched_pairs[n_train + n_val:]
+        
+        # Create destination structure
+        for split in ['train', 'val', 'test']:
+            os.makedirs(os.path.join(dst_dir, 'image', split), exist_ok=True)
+            os.makedirs(os.path.join(dst_dir, 'label', split), exist_ok=True)
+        
+        # Copy files
+        for img, lbl in train_pairs:
+            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'train', img))
+            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'train', lbl))
+        
+        for img, lbl in val_pairs:
+            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'val', img))
+            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'val', lbl))
+        
+        for img, lbl in test_pairs:
+            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'test', img))
+            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'test', lbl))
+    
+    def tab(self, tabnum):
+        return self._tab_directory_content()
+
+
+class package_training(Command):
+    """:package_training <train_script> <test_script> <runs_dir>
+    
+    Package the latest training results with training and testing scripts.
+    Creates a zip file named with current date (YYYYMMDD.zip).
+    
+    Arguments:
+    - train_script: path to training script (.py)
+    - test_script: path to testing script (.py)
+    - runs_dir: path to runs directory (default: ./runs)
+    
+    Example:
+    :package_training ~/train.py ~/test.py ~/runs
+    """
+    
+    def execute(self):
+        import os
+        import zipfile
+        from datetime import datetime
+        
+        if len(self.args) < 3:
+            self.fm.notify("Usage: package_training <train_script> <test_script> <runs_dir>", bad=True)
+            return
+        
+        train_script = os.path.expanduser(self.arg(1))
+        test_script = os.path.expanduser(self.arg(2))
+        runs_dir = os.path.expanduser(self.arg(3)) if len(self.args) > 3 else './runs'
+        
+        # Validate inputs
+        if not os.path.isfile(train_script):
+            self.fm.notify("Training script not found", bad=True)
+            return
+        
+        if not os.path.isfile(test_script):
+            self.fm.notify("Testing script not found", bad=True)
+            return
+        
+        if not os.path.isdir(runs_dir):
+            self.fm.notify("Runs directory not found", bad=True)
+            return
+        
+        # Find the most recent directory in runs
+        subdirs = [d for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+        
+        if not subdirs:
+            self.fm.notify("No training results found in runs directory", bad=True)
+            return
+        
+        # Get the most recently created directory
+        subdirs_with_time = [(d, os.path.getctime(os.path.join(runs_dir, d))) for d in subdirs]
+        subdirs_with_time.sort(key=lambda x: x[1], reverse=True)
+        latest_run = subdirs_with_time[0][0]
+        latest_run_path = os.path.join(runs_dir, latest_run)
+        
+        # Create zip file name
+        zip_name = datetime.now().strftime("%Y%m%d") + ".zip"
+        zip_path = os.path.join(os.path.dirname(train_script), zip_name)
+        
+        if os.path.exists(zip_path):
+            self.fm.notify("Zip file already exists: {}".format(zip_name), bad=True)
+            return
+        
+        try:
+            # Create zip file
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add training script
+                zipf.write(train_script, os.path.basename(train_script))
+                
+                # Add testing script
+                zipf.write(test_script, os.path.basename(test_script))
+                
+                # Add latest run directory
+                for root, dirs, files in os.walk(latest_run_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.join(latest_run, os.path.relpath(file_path, latest_run_path))
+                        zipf.write(file_path, arcname)
+            
+            self.fm.notify("Successfully created: {}".format(zip_name))
+            self.fm.reload_cwd()
+        except Exception as e:
+            self.fm.notify("Error creating zip: {}".format(str(e)), bad=True)
+    
+    def tab(self, tabnum):
+        return self._tab_directory_content()
+
+
+class add_date_prefix(Command):
+    """:add_date_prefix [directory]
+    
+    Add date prefix (YYYYMMDD_) to all files in the specified directory.
+    
+    Example:
+    :add_date_prefix ~/my_folder
+    """
+    
+    def execute(self):
+        import os
+        from datetime import datetime
+        
+        # Get target directory
+        if self.arg(1):
+            target_dir = os.path.expanduser(self.arg(1))
+        else:
+            # Use current selected directory
+            if self.fm.thisfile.is_directory:
+                target_dir = self.fm.thisfile.path
+            else:
+                self.fm.notify("Please specify a directory or select one", bad=True)
+                return
+        
+        if not os.path.isdir(target_dir):
+            self.fm.notify("Not a valid directory", bad=True)
+            return
+        
+        # Get date prefix
+        date_prefix = datetime.now().strftime("%Y%m%d") + "_"
+        
+        # Get all files
+        files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f))]
+        
+        if not files:
+            self.fm.notify("No files found in directory", bad=True)
+            return
+        
+        renamed_count = 0
+        for filename in files:
+            # Skip if already has date prefix
+            if filename.startswith(date_prefix):
+                continue
+            
+            old_path = os.path.join(target_dir, filename)
+            new_path = os.path.join(target_dir, date_prefix + filename)
+            
+            if os.path.exists(new_path):
+                self.fm.notify("Skipping {}: destination exists".format(filename))
+                continue
+            
+            try:
+                os.rename(old_path, new_path)
+                renamed_count += 1
+            except Exception as e:
+                self.fm.notify("Error renaming {}: {}".format(filename, str(e)), bad=True)
+        
+        self.fm.notify("Successfully renamed {} files with date prefix".format(renamed_count))
+        self.fm.reload_cwd()
+    
+    def tab(self, tabnum):
+        return self._tab_directory_content()
