@@ -2387,20 +2387,22 @@ class dataset_split(Command):
     def tab(self, tabnum):
         return self._tab_directory_content()
 
-
 class package_training(Command):
-    """:package_training <train_script> <test_script> <runs_dir>
+    """:package_training <train_script> <test_script> <runs_dir> [-f|--fast]
     
     Package the latest training results with training and testing scripts.
     Creates a zip file named with current date (YYYYMMDD.zip).
+    Use -f or --fast for faster compression (larger file size).
     
     Arguments:
     - train_script: path to training script (.py)
     - test_script: path to testing script (.py)
     - runs_dir: path to runs directory (default: ./runs)
+    - -f, --fast: use faster compression (ZIP_STORED, no compression)
     
-    Example:
+    Examples:
     :package_training ~/train.py ~/test.py ~/runs
+    :package_training ~/train.py ~/test.py ~/runs -f
     """
     
     def execute(self):
@@ -2408,13 +2410,23 @@ class package_training(Command):
         import zipfile
         from datetime import datetime
         
-        if len(self.args) < 3:
-            self.fm.notify("Usage: package_training <train_script> <test_script> <runs_dir>", bad=True)
+        # Parse arguments
+        fast_mode = False
+        args_list = []
+        
+        for arg in self.args[1:]:
+            if arg in ['-f', '--fast']:
+                fast_mode = True
+            else:
+                args_list.append(arg)
+        
+        if len(args_list) < 2:
+            self.fm.notify("Usage: package_training <train_script> <test_script> [runs_dir] [-f]", bad=True)
             return
         
-        train_script = os.path.expanduser(self.arg(1))
-        test_script = os.path.expanduser(self.arg(2))
-        runs_dir = os.path.expanduser(self.arg(3)) if len(self.args) > 3 else './runs'
+        train_script = os.path.expanduser(args_list[0])
+        test_script = os.path.expanduser(args_list[1])
+        runs_dir = os.path.expanduser(args_list[2]) if len(args_list) > 2 else './runs'
         
         # Validate inputs
         if not os.path.isfile(train_script):
@@ -2450,48 +2462,106 @@ class package_training(Command):
             self.fm.notify("Zip file already exists: {}".format(zip_name), bad=True)
             return
         
+        # Choose compression method
+        compression = zipfile.ZIP_STORED if fast_mode else zipfile.ZIP_DEFLATED
+        compress_level = 0 if fast_mode else 6  # 0=no compression, 6=balanced, 9=max
+        
         try:
+            # Show start message
+            mode_msg = "fast mode" if fast_mode else "normal mode"
+            self.fm.notify("Creating archive ({})...".format(mode_msg))
+            
+            # Count total files for progress
+            total_files = 2  # train_script + test_script
+            for root, dirs, files in os.walk(latest_run_path):
+                total_files += len(files)
+            
+            processed_files = 0
+            
             # Create zip file
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            with zipfile.ZipFile(zip_path, 'w', compression, compresslevel=compress_level) as zipf:
                 # Add training script
                 zipf.write(train_script, os.path.basename(train_script))
+                processed_files += 1
                 
                 # Add testing script
                 zipf.write(test_script, os.path.basename(test_script))
+                processed_files += 1
                 
                 # Add latest run directory
                 for root, dirs, files in os.walk(latest_run_path):
+                    # Filter out large unnecessary files
+                    files_to_add = []
                     for file in files:
+                        file_path = os.path.join(root, file)
+                        file_size = os.path.getsize(file_path)
+                        
+                        # Skip very large files (>100MB) - optional
+                        # if file_size > 100 * 1024 * 1024:
+                        #     continue
+                        
+                        files_to_add.append(file)
+                    
+                    for file in files_to_add:
                         file_path = os.path.join(root, file)
                         arcname = os.path.join(latest_run, os.path.relpath(file_path, latest_run_path))
                         zipf.write(file_path, arcname)
+                        
+                        processed_files += 1
+                        
+                        # Show progress every 10 files
+                        if processed_files % 10 == 0:
+                            progress = int(processed_files * 100 / total_files)
+                            self.fm.notify("Packing... {}% ({}/{})".format(
+                                progress, processed_files, total_files))
             
-            self.fm.notify("Successfully created: {}".format(zip_name))
+            # Get final file size
+            zip_size = os.path.getsize(zip_path)
+            size_mb = zip_size / (1024 * 1024)
+            
+            self.fm.notify("Successfully created: {} ({:.1f} MB)".format(zip_name, size_mb))
             self.fm.reload_cwd()
+            
         except Exception as e:
             self.fm.notify("Error creating zip: {}".format(str(e)), bad=True)
+            # Clean up partial zip file
+            if os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                except:
+                    pass
     
     def tab(self, tabnum):
         return self._tab_directory_content()
 
-
 class add_date_prefix(Command):
-    """:add_date_prefix [directory]
+    """:add_date_prefix [directory] [-r|--recursive]
     
     Add date prefix (YYYYMMDD_) to all files in the specified directory.
+    Use -r or --recursive to recursively rename files in subdirectories.
     
-    Example:
+    Examples:
     :add_date_prefix ~/my_folder
+    :add_date_prefix ~/my_folder -r
+    :add_date_prefix -r  (use current selected directory)
     """
     
     def execute(self):
         import os
         from datetime import datetime
         
+        # Parse arguments
+        recursive = False
+        target_dir = None
+        
+        for arg in self.args[1:]:
+            if arg in ['-r', '--recursive']:
+                recursive = True
+            else:
+                target_dir = os.path.expanduser(arg)
+        
         # Get target directory
-        if self.arg(1):
-            target_dir = os.path.expanduser(self.arg(1))
-        else:
+        if not target_dir:
             # Use current selected directory
             if self.fm.thisfile.is_directory:
                 target_dir = self.fm.thisfile.path
@@ -2506,34 +2576,63 @@ class add_date_prefix(Command):
         # Get date prefix
         date_prefix = datetime.now().strftime("%Y%m%d") + "_"
         
-        # Get all files
-        files = [f for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f))]
-        
-        if not files:
-            self.fm.notify("No files found in directory", bad=True)
-            return
-        
         renamed_count = 0
-        for filename in files:
-            # Skip if already has date prefix
-            if filename.startswith(date_prefix):
-                continue
-            
-            old_path = os.path.join(target_dir, filename)
-            new_path = os.path.join(target_dir, date_prefix + filename)
-            
-            if os.path.exists(new_path):
-                self.fm.notify("Skipping {}: destination exists".format(filename))
-                continue
-            
-            try:
-                os.rename(old_path, new_path)
-                renamed_count += 1
-            except Exception as e:
-                self.fm.notify("Error renaming {}: {}".format(filename, str(e)), bad=True)
+        skipped_count = 0
+        error_count = 0
         
-        self.fm.notify("Successfully renamed {} files with date prefix".format(renamed_count))
+        if recursive:
+            # Recursively process all subdirectories
+            for root, dirs, files in os.walk(target_dir, topdown=False):
+                for filename in files:
+                    result = self._rename_file(root, filename, date_prefix)
+                    if result == "renamed":
+                        renamed_count += 1
+                    elif result == "skipped":
+                        skipped_count += 1
+                    elif result == "error":
+                        error_count += 1
+        else:
+            # Only process files in the target directory (not subdirectories)
+            files = [f for f in os.listdir(target_dir) 
+                    if os.path.isfile(os.path.join(target_dir, f))]
+            
+            for filename in files:
+                result = self._rename_file(target_dir, filename, date_prefix)
+                if result == "renamed":
+                    renamed_count += 1
+                elif result == "skipped":
+                    skipped_count += 1
+                elif result == "error":
+                    error_count += 1
+        
+        # Show summary
+        msg = "Renamed: {}, Skipped: {}, Errors: {}".format(
+            renamed_count, skipped_count, error_count)
+        self.fm.notify(msg)
         self.fm.reload_cwd()
+    
+    def _rename_file(self, directory, filename, date_prefix):
+        """
+        Rename a single file with date prefix.
+        Returns: "renamed", "skipped", or "error"
+        """
+        import os
+        
+        # Skip if already has date prefix
+        if filename.startswith(date_prefix):
+            return "skipped"
+        
+        old_path = os.path.join(directory, filename)
+        new_path = os.path.join(directory, date_prefix + filename)
+        
+        if os.path.exists(new_path):
+            return "skipped"
+        
+        try:
+            os.rename(old_path, new_path)
+            return "renamed"
+        except Exception as e:
+            return "error"
     
     def tab(self, tabnum):
         return self._tab_directory_content()
