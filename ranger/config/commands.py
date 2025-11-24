@@ -2336,8 +2336,8 @@ class dataset_split(Command):
         import random
         
         # Check for image and label directories
-        image_dir = os.path.join(src_dir, 'image')
-        label_dir = os.path.join(src_dir, 'label')
+        image_dir = os.path.join(src_dir, 'images')
+        label_dir = os.path.join(src_dir, 'labels')
         
         if not os.path.isdir(image_dir) or not os.path.isdir(label_dir):
             raise ValueError("Dataset must contain 'image' and 'label' directories")
