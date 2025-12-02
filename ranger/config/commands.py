@@ -2207,7 +2207,7 @@ class dataset_number(Command):
 
 
 class dataset_split(Command):
-    """:dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false]
+    """:dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false] [-n <name>]
     
     Split dataset into train/val/test sets according to YOLO format.
     
@@ -2217,11 +2217,14 @@ class dataset_split(Command):
     - -c: classification task
     - -o: object detection task
     - -s: instance segmentation task
-    - -d: add date prefix (default: true)
+    - -d: add date prefix (default: false)
+    - -n: specify custom dataset name (default: use original name)
     
     Examples:
     :dataset_split ~/dataset 7:2:1 -c
-    :dataset_split ~/dataset 8:1:1 -o -d false
+    :dataset_split ~/dataset 8:1:1 -o -d true
+    :dataset_split ~/dataset 7:2:1 -c -n my_custom_dataset
+    :dataset_split ~/dataset 7:2:1 -o -d true -n experiment_v2
     """
     
     def execute(self):
@@ -2232,7 +2235,7 @@ class dataset_split(Command):
         
         # Parse arguments
         if len(self.args) < 3:
-            self.fm.notify("Usage: dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false]", bad=True)
+            self.fm.notify("Usage: dataset_split <directory> <x:y:z> [-c|-o|-s] [-d true|false] [-n <name>]", bad=True)
             return
         
         src_dir = os.path.expanduser(self.arg(1))
@@ -2249,18 +2252,34 @@ class dataset_split(Command):
             self.fm.notify("Invalid ratio format. Use x:y:z (e.g., 7:2:1)", bad=True)
             return
         
-        # Parse task type
+        # Parse task type, date option, and custom name
         task_type = None
-        add_date = True
+        add_date = False  # 改為預設 False
+        custom_name = None
         
-        for arg in self.args[3:]:
+        i = 3
+        while i < len(self.args):
+            arg = self.args[i]
             if arg in ['-c', '-o', '-s']:
                 task_type = arg[1:]  # 'c', 'o', or 's'
+                i += 1
             elif arg == '-d':
                 # Check next argument
-                idx = self.args.index(arg)
-                if idx + 1 < len(self.args):
-                    add_date = self.args[idx + 1].lower() != 'false'
+                if i + 1 < len(self.args):
+                    add_date = self.args[i + 1].lower() == 'true'  # 改為只有明確指定 true 才加入日期
+                    i += 2
+                else:
+                    i += 1
+            elif arg == '-n':
+                # Get custom name from next argument
+                if i + 1 < len(self.args):
+                    custom_name = self.args[i + 1]
+                    i += 2
+                else:
+                    self.fm.notify("Please provide a name after -n", bad=True)
+                    return
+            else:
+                i += 1
         
         if not task_type:
             self.fm.notify("Please specify task type: -c, -o, or -s", bad=True)
@@ -2272,7 +2291,13 @@ class dataset_split(Command):
         
         # Create new dataset name
         date_prefix = datetime.now().strftime("%Y%m%d") + "_" if add_date else ""
-        dataset_name = os.path.basename(src_dir.rstrip('/'))
+        
+        # Use custom name if provided, otherwise use original directory name
+        if custom_name:
+            dataset_name = custom_name
+        else:
+            dataset_name = os.path.basename(src_dir.rstrip('/'))
+        
         new_dataset_name = date_prefix + dataset_name
         parent_dir = os.path.dirname(src_dir.rstrip('/'))
         dst_dir = os.path.join(parent_dir, new_dataset_name)
@@ -2386,6 +2411,7 @@ class dataset_split(Command):
     
     def tab(self, tabnum):
         return self._tab_directory_content()
+
 
 class package_training(Command):
     """:package_training <train_script> <test_script> <runs_dir> [-f|--fast]
