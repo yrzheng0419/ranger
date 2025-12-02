@@ -2213,7 +2213,7 @@ class dataset_split(Command):
     
     Arguments:
     - directory: path to original dataset
-    - x:y:z: ratio for train:val:test (e.g., 7:2:1)
+    - x:y:z: ratio for train:val:test (e.g., 7:2:1 or 8:2:0)
     - -c: classification task
     - -o: object detection task
     - -s: instance segmentation task
@@ -2222,9 +2222,9 @@ class dataset_split(Command):
     
     Examples:
     :dataset_split ~/dataset 7:2:1 -c
-    :dataset_split ~/dataset 8:1:1 -o -d true
+    :dataset_split ~/dataset 8:2:0 -o -d false
     :dataset_split ~/dataset 7:2:1 -c -n my_custom_dataset
-    :dataset_split ~/dataset 7:2:1 -o -d true -n experiment_v2
+    :dataset_split ~/dataset 8:2:0 -o -d true -n experiment_v2
     """
     
     def execute(self):
@@ -2248,13 +2248,15 @@ class dataset_split(Command):
                 raise ValueError
             train_ratio, val_ratio, test_ratio = ratios
             total = sum(ratios)
+            if total == 0:
+                raise ValueError("Ratios cannot all be zero")
         except:
-            self.fm.notify("Invalid ratio format. Use x:y:z (e.g., 7:2:1)", bad=True)
+            self.fm.notify("Invalid ratio format. Use x:y:z (e.g., 7:2:1 or 8:2:0)", bad=True)
             return
         
         # Parse task type, date option, and custom name
         task_type = None
-        add_date = False  # 改為預設 False
+        add_date = False
         custom_name = None
         
         i = 3
@@ -2266,7 +2268,7 @@ class dataset_split(Command):
             elif arg == '-d':
                 # Check next argument
                 if i + 1 < len(self.args):
-                    add_date = self.args[i + 1].lower() == 'true'  # 改為只有明確指定 true 才加入日期
+                    add_date = self.args[i + 1].lower() == 'true'
                     i += 2
                 else:
                     i += 1
@@ -2328,8 +2330,15 @@ class dataset_split(Command):
         if not classes:
             raise ValueError("No class directories found")
         
+        # Determine which splits to create
+        splits_to_create = ['train']
+        if val_r > 0:
+            splits_to_create.append('val')
+        if test_r > 0:
+            splits_to_create.append('test')
+        
         # Create destination structure
-        for split in ['train', 'val', 'test']:
+        for split in splits_to_create:
             for class_name in classes:
                 os.makedirs(os.path.join(dst_dir, split, class_name), exist_ok=True)
         
@@ -2340,8 +2349,10 @@ class dataset_split(Command):
             
             random.shuffle(files)
             
+            # Calculate split indices
             n_train = int(len(files) * train_r / total)
             n_val = int(len(files) * val_r / total)
+            # n_test will be the remainder
             
             train_files = files[:n_train]
             val_files = files[n_train:n_train + n_val]
@@ -2350,10 +2361,14 @@ class dataset_split(Command):
             # Copy files
             for f in train_files:
                 shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'train', class_name, f))
-            for f in val_files:
-                shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'val', class_name, f))
-            for f in test_files:
-                shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'test', class_name, f))
+            
+            if val_r > 0:
+                for f in val_files:
+                    shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'val', class_name, f))
+            
+            if test_r > 0:
+                for f in test_files:
+                    shutil.copy2(os.path.join(class_path, f), os.path.join(dst_dir, 'test', class_name, f))
     
     def _split_detection_segmentation(self, src_dir, dst_dir, train_r, val_r, test_r, total):
         import os
@@ -2365,7 +2380,7 @@ class dataset_split(Command):
         label_dir = os.path.join(src_dir, 'labels')
         
         if not os.path.isdir(image_dir) or not os.path.isdir(label_dir):
-            raise ValueError("Dataset must contain 'image' and 'label' directories")
+            raise ValueError("Dataset must contain 'images' and 'labels' directories")
         
         # Get all image files
         image_files = [f for f in os.listdir(image_dir) if os.path.isfile(os.path.join(image_dir, f))]
@@ -2384,34 +2399,44 @@ class dataset_split(Command):
         
         random.shuffle(matched_pairs)
         
+        # Calculate split indices
         n_train = int(len(matched_pairs) * train_r / total)
         n_val = int(len(matched_pairs) * val_r / total)
+        # n_test will be the remainder
         
         train_pairs = matched_pairs[:n_train]
         val_pairs = matched_pairs[n_train:n_train + n_val]
         test_pairs = matched_pairs[n_train + n_val:]
         
+        # Determine which splits to create
+        splits_to_create = ['train']
+        if val_r > 0:
+            splits_to_create.append('val')
+        if test_r > 0:
+            splits_to_create.append('test')
+        
         # Create destination structure
-        for split in ['train', 'val', 'test']:
-            os.makedirs(os.path.join(dst_dir, 'image', split), exist_ok=True)
-            os.makedirs(os.path.join(dst_dir, 'label', split), exist_ok=True)
+        for split in splits_to_create:
+            os.makedirs(os.path.join(dst_dir, 'images', split), exist_ok=True)
+            os.makedirs(os.path.join(dst_dir, 'labels', split), exist_ok=True)
         
         # Copy files
         for img, lbl in train_pairs:
-            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'train', img))
-            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'train', lbl))
+            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'images', 'train', img))
+            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'labels', 'train', lbl))
         
-        for img, lbl in val_pairs:
-            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'val', img))
-            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'val', lbl))
+        if val_r > 0:
+            for img, lbl in val_pairs:
+                shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'images', 'val', img))
+                shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'labels', 'val', lbl))
         
-        for img, lbl in test_pairs:
-            shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'image', 'test', img))
-            shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'label', 'test', lbl))
+        if test_r > 0:
+            for img, lbl in test_pairs:
+                shutil.copy2(os.path.join(image_dir, img), os.path.join(dst_dir, 'images', 'test', img))
+                shutil.copy2(os.path.join(label_dir, lbl), os.path.join(dst_dir, 'labels', 'test', lbl))
     
     def tab(self, tabnum):
         return self._tab_directory_content()
-
 
 class package_training(Command):
     """:package_training <train_script> <test_script> <runs_dir> <env_file> [-c|--compress]
