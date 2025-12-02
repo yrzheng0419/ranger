@@ -2414,21 +2414,23 @@ class dataset_split(Command):
 
 
 class package_training(Command):
-    """:package_training <train_script> <test_script> <runs_dir> [-f|--fast]
+    """:package_training <train_script> <test_script> <runs_dir> <env_file> [-c|--compress]
     
     Package the latest training results with training and testing scripts.
     Creates a zip file named with current date (YYYYMMDD.zip).
-    Use -f or --fast for faster compression (larger file size).
+    Use -c or --compress for smaller file size (slower compression).
     
     Arguments:
     - train_script: path to training script (.py)
     - test_script: path to testing script (.py)
-    - runs_dir: path to runs directory (default: ./runs)
-    - -f, --fast: use faster compression (ZIP_STORED, no compression)
+    - runs_dir: path to runs directory
+    - env_file: path to environment file (e.g., requirements.txt, environment.yml)
+    - -c, --compress: use compression for smaller file size (default: no compression, faster)
     
     Examples:
-    :package_training ~/train.py ~/test.py ~/runs
-    :package_training ~/train.py ~/test.py ~/runs -f
+    :package_training ~/train.py ~/test.py ~/runs ~/requirements.txt
+    :package_training ~/train.py ~/test.py ~/runs ~/requirements.txt -c
+    :package_training ~/train.py ~/test.py ~/runs ~/environment.yml --compress
     """
     
     def execute(self):
@@ -2437,22 +2439,23 @@ class package_training(Command):
         from datetime import datetime
         
         # Parse arguments
-        fast_mode = False
+        compress_mode = False
         args_list = []
         
         for arg in self.args[1:]:
-            if arg in ['-f', '--fast']:
-                fast_mode = True
+            if arg in ['-c', '--compress']:
+                compress_mode = True
             else:
                 args_list.append(arg)
         
-        if len(args_list) < 2:
-            self.fm.notify("Usage: package_training <train_script> <test_script> [runs_dir] [-f]", bad=True)
+        if len(args_list) < 4:
+            self.fm.notify("Usage: package_training <train_script> <test_script> <runs_dir> <env_file> [-c]", bad=True)
             return
         
         train_script = os.path.expanduser(args_list[0])
         test_script = os.path.expanduser(args_list[1])
-        runs_dir = os.path.expanduser(args_list[2]) if len(args_list) > 2 else './runs'
+        runs_dir = os.path.expanduser(args_list[2])
+        env_file = os.path.expanduser(args_list[3])
         
         # Validate inputs
         if not os.path.isfile(train_script):
@@ -2465,6 +2468,10 @@ class package_training(Command):
         
         if not os.path.isdir(runs_dir):
             self.fm.notify("Runs directory not found", bad=True)
+            return
+        
+        if not os.path.isfile(env_file):
+            self.fm.notify("Environment file not found", bad=True)
             return
         
         # Find the most recent directory in runs
@@ -2488,17 +2495,17 @@ class package_training(Command):
             self.fm.notify("Zip file already exists: {}".format(zip_name), bad=True)
             return
         
-        # Choose compression method
-        compression = zipfile.ZIP_STORED if fast_mode else zipfile.ZIP_DEFLATED
-        compress_level = 0 if fast_mode else 6  # 0=no compression, 6=balanced, 9=max
+        # Choose compression method (預設為快速模式，不壓縮)
+        compression = zipfile.ZIP_DEFLATED if compress_mode else zipfile.ZIP_STORED
+        compress_level = 6 if compress_mode else 0  # 6=balanced compression, 0=no compression
         
         try:
             # Show start message
-            mode_msg = "fast mode" if fast_mode else "normal mode"
+            mode_msg = "compressed mode" if compress_mode else "fast mode (no compression)"
             self.fm.notify("Creating archive ({})...".format(mode_msg))
             
             # Count total files for progress
-            total_files = 2  # train_script + test_script
+            total_files = 3  # train_script + test_script + env_file
             for root, dirs, files in os.walk(latest_run_path):
                 total_files += len(files)
             
@@ -2512,6 +2519,10 @@ class package_training(Command):
                 
                 # Add testing script
                 zipf.write(test_script, os.path.basename(test_script))
+                processed_files += 1
+                
+                # Add environment file
+                zipf.write(env_file, os.path.basename(env_file))
                 processed_files += 1
                 
                 # Add latest run directory
@@ -2545,7 +2556,9 @@ class package_training(Command):
             zip_size = os.path.getsize(zip_path)
             size_mb = zip_size / (1024 * 1024)
             
-            self.fm.notify("Successfully created: {} ({:.1f} MB)".format(zip_name, size_mb))
+            # Show summary
+            self.fm.notify("Successfully created: {} ({:.1f} MB) - {}".format(
+                zip_name, size_mb, mode_msg))
             self.fm.reload_cwd()
             
         except Exception as e:
@@ -2559,6 +2572,7 @@ class package_training(Command):
     
     def tab(self, tabnum):
         return self._tab_directory_content()
+
 
 class add_date_prefix(Command):
     """:add_date_prefix [directory] [-r|--recursive]
