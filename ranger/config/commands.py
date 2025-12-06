@@ -100,7 +100,15 @@ from io import open
 
 from ranger import PY3
 from ranger.api.commands import Command
-
+try:
+    from ranger.config.plugins.ssh_download import *
+    from ranger.config.plugins.sort_file import *
+    from ranger.config.plugins.ml_priority import *
+except ImportError as e:
+    # 這樣寫是為了防止某個模組壞掉導致整個 Ranger 開不起來
+    # 可以在 debug 模式看到錯誤
+    import sys
+    sys.stderr.write(f"Failed to load custom plugin: {e}\n")
 
 class alias(Command):
     """:alias <newcommand> <oldcommand>
