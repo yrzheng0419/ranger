@@ -101,6 +101,13 @@ handle_extension() {
             xlsx2csv -- "${FILE_PATH}" && exit 5
             exit 1;;
 
+        ## CSV (manually added)
+        csv)
+            ## Use pandas dataframe to preview CSV
+            ## csv_preview.py is previously added at the route >
+            python3 -m ranger.ext.csv_preview.py "${FILE_PATH}">
+            exit 1;;
+
         ## HTML
         htm|html|xhtml)
             ## Preview as text conversion
