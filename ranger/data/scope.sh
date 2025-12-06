@@ -105,7 +105,7 @@ handle_extension() {
         csv)
             ## Use pandas dataframe to preview CSV
             ## csv_preview.py is previously added at the route >
-            python3 -m ranger.ext.csv_preview.py "${FILE_PATH}">
+            python3 "$HOME/ranger/ranger/ext/csv_preview.py" "${FILE_PATH}">
             exit 1;;
 
         ## HTML
