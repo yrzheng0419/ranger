@@ -1,7 +1,110 @@
-<div align="center">
+<div align="left">
 <a href="https://ranger.fm/">
 <img src="https://ranger.fm/ranger_logo.png" width="200">
 </a>
+
+## 基於 Ranger 的模型研究加速系統
+
+本專案以開源終端機檔案管理器 **Ranger** 為基礎，
+針對機器學習 / 深度學習研究流程中常見的檔案管理、資料集處理與結果檢視需求，
+設計並實作一套 **模型研究加速系統**。
+
+- Original Project (Ranger): https://github.com/ranger/ranger
+
+---
+
+## 專案介紹
+Ranger 是一套以 Python 撰寫、支援 Vim-like 鍵盤操作的終端機檔案管理器，
+可透過多欄式介面快速瀏覽目錄結構，並支援檔案預覽與高度客製化。
+
+在實驗室實際研究情境中，我們發現研究生常需要反覆進行：
+- 資料集整理與重新命名
+- 訓練 / 驗證 / 測試資料切分
+- 訓練結果版本管理
+- 快速查看 CSV、PDF 等實驗輸出
+- 將 VM 中的結果下載並分類到本地端
+
+若僅使用傳統 CLI 指令或 GUI 工具，操作繁瑣且容易出錯。
+因此本專案在 Ranger 上新增多項指令與預覽功能，
+讓研究生能在終端機內完成完整的模型研究流程。
+
+---
+
+## 使用情境與目標
+- 不熟悉 Linux 指令的研究者：降低學習門檻、減少指令數量
+- 需要大量實驗的研究者：加速資料處理與模型訓練流程
+- 模型研究後期：強化版本控制、提升實驗可重現性
+- 競賽與論文實驗：快速測試不同資料集與設定
+
+---
+
+## 系統功能
+
+### 1. 資料處理與訓練前置作業
+#### (1️) 批量加入日期前綴
+為指定資料夾中的所有檔案名稱加上日期前綴（格式：`YYYYMMDD_`），方便依時間追蹤和管理檔案版本。
+- 語法：`:add_date_prefix <directory> [falgs]`
+- 參數：`-r` 或 `--recursive` 遞迴處理所有子資料夾中的檔案
+
+#### (2) 資料集檔案編號
+將資料夾中的所有檔案依序重新命名為 8 位數編號（格式：`00000001.ext`, `00000002.ext`），解決亂碼檔名問題，便於實驗記錄和追蹤。
+- 語法：:`dataset_number <directory>`
+- 限制：資料夾內不可包含子資料夾（若包含則返回錯誤)
+
+#### (3) YOLO 格式資料集切分
+將原始資料集依指定比例切分為訓練集/驗證集/測試集，並自動轉換為 YOLO 格式，支援分類、物件偵測、實例分割三種任務類型。
+- 語法：`dataset_split <directory> <x:y:z> <-c|-o|-s> [flags]`
+- 參數：
+  - `<x:y:z>`：訓練集:驗證集:測試集的比例（例如 7:2:1）
+  - `-c`：分類任務 (Classification)
+  - `-o`：物件偵測任務 (Object Detection)
+  - `-s`：實例分割任務 (Instance Segmentation)
+  - `-d <true|false>`：是否加入日期前綴（預設 true），格式：YYYYMMDD_原資料集名稱
+
+### 2. 檔案預覽
+#### (1) CSV 檔預覽
+Ranger 提供 TXT、CSV 等多種檔案的預覽介面，不過預設的 CSV 預覽不易閱讀，因此改以 pandas Dataframe 提升可讀性，並增加全螢幕預覽模式。
+- 以滑鼠點選想要預覽的 CSV 檔即可在右邊欄進行預覽。
+- 語法：`,c`，點選想要預覽的 CSV 檔後，鍵入此快捷鍵即可進行全頁預覽。
+
+### 3. 本地下載與分類管理
+#### (1) 遠端傳輸
+透過 SSH Reverse Tunnel 將 VM 檔案下載至本地，並自動分類。為確保連線穩定，請強制指定 IPv4 Loopback： `ssh -R2222:127.0.0.1:22 user@vm-ip`。
+- 語法: :`ssh_download <user@host:path> [flags]`
+- 參數 :
+  - `-e` : 依 副檔名 (Extension) 分類 (e.g., `jpg/`, `logs/`)
+  - `-d` : 依 日期 (Date) 分類 (e.g., `2025-12/`)
+  - `-s` <char> : 依 前綴分隔符 (Separator) 分類 (e.g., `ProjectA_ `-> `ProjectA/`)
+
+#### (2) 優先排序
+動態調整檔案排序權重，解決訓練目錄檔案雜亂問題。
+- Plugin: `ml_priority`
+- 指令:
+  - `:priority <kw1> [kw2]`: 置頂含有關鍵字的檔案 (e.g., `:priority best .pth`)
+  - `:priority`: 清除篩選，恢復預設。
+
+#### (3) 日期管理
+針對 `YYYYMMDD_` 格式的檔案進行管理。
+- Plugin: `ml_priority` (整合模組)
+- 指令
+  - :`sort_date:` 切換為 日期前綴排序 (由新到舊)，忽略檔名其餘部分。
+  - :`mark_date [date]:` 選取特定日期的檔案 (預設 `today`)，方便批次操作。
+
+---
+
+## 環境需求
+- 作業系統：Linux
+- 必要套件：
+  - `pip install pandas`
+  - `sudo apt install poppler-utils` (PDF 預覽)
+
+## References
+- Ranger: https://github.com/ranger/ranger
+- pandas: https://pandas.pydata.org/
+
+---
+
+# **The original ranger README is preserved below.**
 
 Ranger 1.9.4
 ============
